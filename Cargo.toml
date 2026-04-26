@@ -1,0 +1,22 @@
+[package]
+name        = "embedded-stats-f32"
+version     = "0.1.0"
+edition     = "2024"
+authors     = ["Jorge Andre Castro <georgeandrec@gmail.com>"]
+license     = "GPL-2.0-or-later"
+description = "Statistiques f32 no_std : moyenne, variance, écart type, moyenne streaming — zéro dépendance externe, zéro unsafe"
+repository  = "https://github.com/jorgeandrecastro/embedded-stats-f32"
+documentation = "https://docs.rs/embedded-stats-f32"
+readme      = "README.md"
+keywords    = ["statistics", "fixed-point", "no-std", "embedded", "math"]
+categories  = ["mathematics", "no-std", "embedded"]
+
+[dependencies]
+embedded-f32-sqrt = "0.2.0"
+
+[profile.release]
+opt-level     = "z"   # Taille minimale du binaire
+lto           = true  # Link-Time Optimization
+codegen-units = 1
+panic         = "abort"
+strip         = true
