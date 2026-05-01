@@ -10,7 +10,7 @@ checksum = "2cb34de8cdbd96b4cdd81ebf6d45946f56cbf5c5e98b127e833af8a9628d015d"
 
 [[package]]
 name = "embedded-stats-f32"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "embedded-f32-sqrt",
 ]

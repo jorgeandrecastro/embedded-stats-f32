@@ -6,6 +6,7 @@
 // n'importe quelle version ultérieure.
 
 //! # embedded-stats-f32
+//! [`StreamingStats`] moyenne + variance + écart type en streaming (Welford)
 //!
 //! Statistiques `f32` pour systèmes embarqués `no_std`.
 //!
@@ -55,7 +56,7 @@ pub enum StatsError {
 
 /// Vérifie qu'une valeur `f32` est finie (`!NaN`, `!±inf`).
 ///
-/// Point unique de validation — évite de dupliquer la logique dans chaque fonction.
+/// Point unique de validation  évite de dupliquer la logique dans chaque fonction.
 #[inline]
 fn ensure_finite(x: f32) -> Result<f32, StatsError> {
     if x.is_finite() {
@@ -195,13 +196,14 @@ pub fn std_dev(data: &[f32]) -> Result<f32, StatsError> {
 pub struct StreamingStats {
     count: u32,
     mean:  f32,
+    m2:    f32,
 }
 
 impl StreamingStats {
     /// Crée un accumulateur vide.
     #[inline]
     pub const fn new() -> Self {
-        Self { count: 0, mean: 0.0 }
+        Self { count: 0, mean: 0.0 , m2: 0.0 }
     }
 
     /// Intègre une nouvelle observation.
@@ -210,18 +212,25 @@ impl StreamingStats {
     /// En cas d'erreur, l'état interne est **inchangé**.
     #[inline]
     pub fn update(&mut self, x: f32) -> Result<(), StatsError> {
-        let x = ensure_finite(x)?;
-        self.count += 1;
-        self.mean  += (x - self.mean) / self.count as f32;
-        Ok(())
-    }
+       let x = ensure_finite(x)?;
+
+       self.count += 1;
+
+       let delta  = x - self.mean;
+       self.mean += delta / self.count as f32;
+       let delta2 = x - self.mean;
+
+       self.m2 += delta * delta2;
+
+       Ok(())
+    }    
 
     /// Retourne la moyenne courante.
     ///
     /// # Erreurs
     ///
-    /// - [`StatsError::EmptySlice`]     — aucune observation intégrée
-    /// - [`StatsError::NonFiniteValue`] — état interne corrompu (théoriquement impossible
+    /// - [`StatsError::EmptySlice`]     : aucune observation intégrée
+    /// - [`StatsError::NonFiniteValue`] : état interne corrompu (théoriquement impossible
     ///   via [`update`](StreamingStats::update), garde de sécurité défensive)
     #[inline]
     pub fn mean(&self) -> Result<f32, StatsError> {
@@ -243,17 +252,43 @@ impl StreamingStats {
     pub fn reset(&mut self) {
         self.count = 0;
         self.mean  = 0.0;
+        // Remise à zéro de m2 pour éviter les incohérences si on continue à utiliser l'accumulateur après reset.
+        self.m2    = 0.0;
     }
 
     /// Garde défensive : vérifie que l'état interne est cohérent.
     #[inline]
-    fn check_state(&self) -> Result<(), StatsError> {
-        if self.mean.is_finite() {
-            Ok(())
-        } else {
-            Err(StatsError::NonFiniteValue)
-        }
+   fn check_state(&self) -> Result<(), StatsError> {
+    if self.mean.is_finite() && self.m2.is_finite() {
+        Ok(())
+    } else {
+        Err(StatsError::NonFiniteValue)
     }
+   }
+  /// Variance de population (diviseur N) en streaming.
+  #[inline]
+  pub fn running_variance(&self) -> Result<f32, StatsError> {
+    if self.count == 0 {
+        return Err(StatsError::EmptySlice);
+    }
+
+    self.check_state()?;
+
+    let v = self.m2 / self.count as f32;
+    let v = if v < 0.0 { 0.0 } else { v };
+
+    ensure_finite(v)
+  }
+
+/// Écart type en streaming (= √variance).
+#[inline]
+pub fn running_std_dev(&self) -> Result<f32, StatsError> {
+    let v = self.running_variance()?;
+    let s = sqrt(v).map_err(|_| StatsError::NonFiniteValue)?;
+    ensure_finite(s)
+}
+
+
 }
 
 impl Default for StreamingStats {
@@ -283,6 +318,7 @@ fn kahan_sum_checked(data: &[f32]) -> Result<f32, StatsError> {
 
     Ok(sum)
 }
+
 
 // Tests 
 
@@ -426,4 +462,119 @@ mod tests {
         let stream = acc.mean().unwrap();
         assert!((batch - stream).abs() < 1e-5, "batch={batch} stream={stream}");
     }
+
+
+    #[test]
+    fn test_streaming_variance_matches_batch() {
+      let mut acc = StreamingStats::new();
+      for &x in &DATA {
+        acc.update(x).unwrap();
+    }
+
+      let batch  = variance(&DATA).unwrap();
+      let stream = acc.running_variance().unwrap();
+
+    assert!((batch - stream).abs() < 1e-4,
+        "batch={batch}, stream={stream}");
+   }
+
+   #[test]
+   fn test_streaming_std_dev_matches_batch() {
+    let mut acc = StreamingStats::new();
+    for &x in &DATA {
+        acc.update(x).unwrap();
+    }
+
+    let batch  = std_dev(&DATA).unwrap();
+    let stream = acc.running_std_dev().unwrap();
+
+    assert!((batch - stream).abs() < 1e-4,
+        "batch={batch}, stream={stream}");
+   }
+
+  #[test]
+  fn test_streaming_large_stability() {
+    let mut acc = StreamingStats::new();
+
+    for i in 0..1_000 {
+        acc.update(i as f32).unwrap();
+    }
+
+    let mean = acc.mean().unwrap();
+
+    // moyenne attendue ≈ 499.5
+    assert!((mean - 499.5).abs() < 1e-2);
+  }
+
+
+  #[test]
+  fn test_nan_does_not_corrupt_state() {
+    let mut acc = StreamingStats::new();
+
+    acc.update(10.0).unwrap();
+    acc.update(20.0).unwrap();
+
+    let before = acc.mean().unwrap();
+
+    assert_eq!(acc.update(f32::NAN), Err(StatsError::NonFiniteValue));
+
+    let after = acc.mean().unwrap();
+
+    assert!((before - after).abs() < 1e-6);
+    assert_eq!(acc.count(), 2);
+  }
+
+
+  #[test]
+  fn test_count_monotonic() {
+    let mut acc = StreamingStats::new();
+
+    for i in 1..100 {
+        acc.update(i as f32).unwrap();
+        assert_eq!(acc.count(), i);
+    }
+  }
+
+
+
+  #[test]
+  fn test_constant_values_zero_variance() {
+    let mut acc = StreamingStats::new();
+
+    for _ in 0..100 {
+        acc.update(5.0).unwrap();
+    }
+
+    let v = acc.running_variance().unwrap();
+    assert!(v.abs() < 1e-6);
+   }
+
+
+  #[test]
+  fn test_inf_inputs_rejected() {
+    let mut acc = StreamingStats::new();
+
+    assert_eq!(acc.update(f32::INFINITY), Err(StatsError::NonFiniteValue));
+    assert_eq!(acc.update(f32::NEG_INFINITY), Err(StatsError::NonFiniteValue));
+
+    assert_eq!(acc.count(), 0);
+   }
+
+
+  #[test]
+  fn test_streaming_long_run_stability() {
+    let mut acc = StreamingStats::new();
+
+    let mut sum = 0.0;
+    for i in 1..10_000 {
+        let x = (i as f32).sin() * 100.0;
+        acc.update(x).unwrap();
+        sum += x;
+    }
+
+    let mean_manual = sum / 10_000.0;
+    let mean_stream = acc.mean().unwrap();
+
+    assert!((mean_manual - mean_stream).abs() < 1e-3);
+  }
 }

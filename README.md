@@ -3,9 +3,56 @@
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 
 # embedded-stats-f32
-> Statistiques `f32` `no_std` : moyenne, variance, écart type, moyenne streaming  zéro dépendance externe, zéro `unsafe`, rejet garanti des `NaN` et `±inf` pour une meilleure approche numérique et gestion des edge cases .
+> Statistiques `f32` `no_std` : moyenne, variance, écart type, moyenne streaming  zéro dépendance externe, zéro `unsafe`, rejet garanti des `NaN` et `±inf` pour une meilleure approche numérique et gestion des edge cases Validée sur RP2350b de Waveshare avec 1082 iterations sur un compteur/timer allant de 0 à 1082 .
 
 ---
+
+## 🚀 Version 0.3.0 : Streaming renforcé & robuste
+
+La version 0.3.0 transforme `StreamingStats` en un moteur statistique embarqué complet, stable pour systèmes temps réel.
+
+---
+
+### 🧠 Nouvelles fonctionnalités streaming
+
+Ajout des calculs en streaming :
+
+- `running_variance()` → variance en ligne (Welford)
+- `running_std_dev()` → écart type en ligne
+
+Ces méthodes utilisent l’état interne (`mean`, `m2`, `count`) pour garantir :
+- O(1) mémoire
+- calcul incrémental stable
+- compatibilité capteurs temps réel
+
+---
+
+### ⚙️ Robustesse
+
+- validation stricte de l’état interne
+- protection contre corruption après `NaN` / `±inf`
+- cohérence batch vs streaming
+- stabilité numérique renforcée sur longues séries
+
+---
+
+### 🧪 Exemple
+
+```rust
+use embedded_stats_f32::{StreamingStats, StatsError};
+
+let data = [2.0_f32, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0];
+
+let mut acc = StreamingStats::new();
+
+for x in data {
+    acc.update(x).unwrap();
+}
+
+let mean = acc.mean().unwrap();
+let var  = acc.running_variance().unwrap();
+let std  = acc.running_std_dev().unwrap();
+```
 
 # Update version 0.2.0  protection NaN/inf
 
@@ -59,7 +106,7 @@ acc.update(x)?;
 
 ```toml
 [dependencies]
-embedded-stats-f32 = "0.2.0"
+embedded-stats-f32 = "0.3.0"
 ```
 
 ---
